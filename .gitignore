@@ -1,0 +1,21 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.cjs
+
+# testing
+/coverage
+
+# production
+/dist
+
+# misc
+.DS_Store
+.env.local
+.env.*.local
+
+# npm package manager config
+npm-debug.log*
+.npmrc
+.yarn/
+.yarn-integrity
