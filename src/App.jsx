@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, createContext, useContext } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, where, updateDoc, arrayUnion } from 'firebase/firestore';
@@ -18,10 +18,18 @@ import {
   X,
   CircleCheck,
 } from 'lucide-react';
-import { createContext, useContext } from 'react';
 
 // Context for Firebase and User state
 const AppContext = createContext();
+
+// Global variables provided by the canvas environment
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : '';
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const auth = getAuth(app);
 
 const App = () => {
   const [view, setView] = useState('index'); // index, auctioneerSetup, auctioneerRoom, bidderSetup, bidderRoom
@@ -30,8 +38,6 @@ const App = () => {
   const [userRole, setUserRole] = useState(null); // 'auctioneer' or 'bidder'
   const [loading, setLoading] = useState(true);
   const [isAuthReady, setIsAuthReady] = useState(false);
-  const [db, setDb] = useState(null);
-  const [auth, setAuth] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [modalMessage, setModalMessage] = useState('');
   const [modalTitle, setModalTitle] = useState('');
@@ -39,45 +45,29 @@ const App = () => {
 
   // Firebase Initialization and Auth
   useEffect(() => {
-    const initFirebase = async () => {
+    const initAuth = async () => {
       try {
-        // Your web app's Firebase configuration
-        // For Firebase JS SDK v7.20.0 and later, measurementId is optional
-        const firebaseConfig = {
-          apiKey: "AIzaSyBZqJVL3yV7jhn2HIq1zT-UrnKmqNI3Xqo",
-          authDomain: "my-efootball-app.firebaseapp.com",
-          projectId: "my-efootball-app",
-          storageBucket: "my-efootball-app.firebasestorage.app",
-          messagingSenderId: "813346703891",
-          appId: "1:813346703891:web:0eab118bbcd9357fce0de6",
-          measurementId: "G-DKK879PCDC"
-        };
-        const app = initializeApp(firebaseConfig);
-        const firestore = getFirestore(app);
-        const appAuth = getAuth(app);
-        setDb(firestore);
-        setAuth(appAuth);
-
-        onAuthStateChanged(appAuth, (user) => {
-          if (user) {
-            setUserId(user.uid);
-            setIsAuthReady(true);
-          } else {
-            // Sign in anonymously if no token is available
-            signInAnonymously(appAuth).then((userCredential) => {
-              setUserId(userCredential.user.uid);
-              setIsAuthReady(true);
-            }).catch((error) => {
-              console.error("Anonymous sign-in failed", error);
-            });
-          }
-        });
-
+        if (initialAuthToken) {
+          await signInWithCustomToken(auth, initialAuthToken);
+        } else {
+          await signInAnonymously(auth);
+        }
       } catch (error) {
-        console.error("Firebase initialization failed:", error);
+        console.error("Authentication failed:", error);
+      } finally {
+        setIsAuthReady(true);
       }
     };
-    initFirebase();
+
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setUserId(user.uid);
+      } else {
+        setUserId(null);
+      }
+    });
+
+    initAuth();
   }, []);
 
   const showPopup = (title, message) => {
@@ -92,9 +82,9 @@ const App = () => {
     setModalMessage('');
   };
 
-  if (!isAuthReady) {
+  if (!isAuthReady || !userId) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-900 text-white">
+      <div className="flex items-center justify-center min-h-screen bg-gray-950 text-white font-sans">
         <p>Loading...</p>
       </div>
     );
@@ -105,20 +95,20 @@ const App = () => {
       case 'index':
         return <IndexPage setView={setView} />;
       case 'auctioneerSetup':
-        return <AuctioneerSetup setView={setView} userId={userId} db={db} showPopup={showPopup} />;
+        return <AuctioneerSetup />;
       case 'auctioneerRoom':
-        return <AuctioneerRoom setRoom={setRoom} room={room} userId={userId} db={db} showPopup={showPopup} setView={setView} />;
+        return <AuctioneerRoom />;
       case 'bidderSetup':
-        return <BidderSetup setView={setView} userId={userId} db={db} showPopup={showPopup} setRoomCode={setRoomCode} />;
+        return <BidderSetup />;
       case 'bidderRoom':
-        return <BidderRoom setRoom={setRoom} room={room} userId={userId} db={db} showPopup={showPopup} roomCode={roomCode} setView={setView} />;
+        return <BidderRoom />;
       default:
         return <IndexPage setView={setView} />;
     }
   };
 
   return (
-    <AppContext.Provider value={{ db, userId, userRole, setUserRole, room, setRoom, showPopup, setView }}>
+    <AppContext.Provider value={{ db, userId, userRole, setUserRole, room, setRoom, showPopup, setView, roomCode, setRoomCode }}>
       <div className="font-sans bg-gray-950 text-gray-100 min-h-screen">
         {renderView()}
         {showModal && <Modal title={modalTitle} message={modalMessage} onClose={closeModal} />}
@@ -178,7 +168,8 @@ const IndexPage = ({ setView }) => {
   );
 };
 
-const AuctioneerSetup = ({ setView, userId, db, showPopup }) => {
+const AuctioneerSetup = () => {
+  const { db, userId, setView, showPopup, setRoom } = useContext(AppContext);
   const [roomName, setRoomName] = useState('');
   const [maxParticipants, setMaxParticipants] = useState(20);
   const [bidIncrement, setBidIncrement] = useState(100);
@@ -192,7 +183,7 @@ const AuctioneerSetup = ({ setView, userId, db, showPopup }) => {
     setLoading(true);
     try {
       const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-      const roomDocRef = doc(db, 'rooms', roomCode);
+      const roomDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomCode);
       const newRoom = {
         roomName,
         maxParticipants,
@@ -201,7 +192,7 @@ const AuctioneerSetup = ({ setView, userId, db, showPopup }) => {
         participants: [],
         players: [],
         currentBiddingPlayerIndex: null,
-        finalCallState: 0, // 0: not started, 1: first, 2: second, 3: sold
+        finalCallState: 0,
         createdAt: new Date(),
         active: true
       };
@@ -209,6 +200,7 @@ const AuctioneerSetup = ({ setView, userId, db, showPopup }) => {
       await setDoc(roomDocRef, newRoom);
       showPopup('Success', `Auction room created! Share this code with bidders: ${roomCode}`);
       setLoading(false);
+      setRoom({ id: roomCode, ...newRoom });
       setView('auctioneerRoom');
     } catch (error) {
       console.error('Error creating room:', error);
@@ -268,59 +260,57 @@ const AuctioneerSetup = ({ setView, userId, db, showPopup }) => {
   );
 };
 
-const AuctioneerRoom = ({ room, userId, db, showPopup, setRoom }) => {
+const AuctioneerRoom = () => {
+  const { room, setRoom, userId, db, showPopup, setView } = useContext(AppContext);
   const [loading, setLoading] = useState(true);
-  const [currentBiddingPlayer, setCurrentBiddingPlayer] = useState(null);
   const [showPlayerForm, setShowPlayerForm] = useState(false);
   const [newPlayer, setNewPlayer] = useState({ name: '', club: '', position: '', style: '', value: 0 });
   const [finalCallMessage, setFinalCallMessage] = useState('');
-  const [showWinnerModal, setShowWinnerModal] = useState(false);
-  const [winnerInfo, setWinnerInfo] = useState(null);
   const [showParticipantsModal, setShowParticipantsModal] = useState(false);
   const [selectedParticipantBids, setSelectedParticipantBids] = useState(null);
-  const { setView } = useContext(AppContext);
 
   useEffect(() => {
     if (!db || !userId) return;
 
-    const q = query(collection(db, 'rooms'), where('auctioneerId', '==', userId), where('active', '==', true));
+    const q = query(
+      collection(db, 'artifacts', appId, 'public', 'data', 'rooms'),
+      where('auctioneerId', '==', userId),
+      where('active', '==', true)
+    );
     
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       if (querySnapshot.empty) {
+        setRoom(null);
+        setLoading(false);
         showPopup('Error', 'No active auction room found. Please create one.');
         setView('auctioneerSetup');
         return;
       }
+      const doc = querySnapshot.docs[0];
+      const roomData = { id: doc.id, ...doc.data() };
+      setRoom(roomData);
+      setLoading(false);
 
-      querySnapshot.forEach((doc) => {
-        const roomData = { id: doc.id, ...doc.data() };
-        setRoom(roomData);
-        setLoading(false);
-
-        // Update final call message
-        const currentPlayerIndex = roomData.currentBiddingPlayerIndex;
-        if (currentPlayerIndex !== null && roomData.players[currentPlayerIndex]) {
-          const player = roomData.players[currentPlayerIndex];
-          switch (roomData.finalCallState) {
-            case 1:
-              setFinalCallMessage("First call");
-              break;
-            case 2:
-              setFinalCallMessage("Second call");
-              break;
-            case 3:
-              setFinalCallMessage("Final call");
-              showPopup('Sold!', `${player.name} sold for ${player.currentBid} to ${player.highestBidderName}!`);
-              setFinalCallMessage("");
-              break;
-            default:
-              setFinalCallMessage("");
-              break;
-          }
-        } else {
-          setFinalCallMessage("");
+      const currentPlayerIndex = roomData.currentBiddingPlayerIndex;
+      if (currentPlayerIndex !== null && roomData.players[currentPlayerIndex]) {
+        const player = roomData.players[currentPlayerIndex];
+        switch (roomData.finalCallState) {
+          case 1:
+            setFinalCallMessage("First call");
+            break;
+          case 2:
+            setFinalCallMessage("Second call");
+            break;
+          case 3:
+            setFinalCallMessage("Final call");
+            break;
+          default:
+            setFinalCallMessage("");
+            break;
         }
-      });
+      } else {
+        setFinalCallMessage("");
+      }
     }, (error) => {
       console.error("Error fetching room data:", error);
       showPopup('Error', 'Failed to load auction room data.');
@@ -329,7 +319,6 @@ const AuctioneerRoom = ({ room, userId, db, showPopup, setRoom }) => {
 
     return () => unsubscribe();
   }, [db, userId, setRoom, showPopup, setView]);
-
 
   const handleInputChange = (e) => {
     setNewPlayer({ ...newPlayer, [e.target.name]: e.target.value });
@@ -342,7 +331,7 @@ const AuctioneerRoom = ({ room, userId, db, showPopup, setRoom }) => {
     }
 
     try {
-      const roomDocRef = doc(db, 'rooms', room.id);
+      const roomDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', room.id);
       const updatedPlayers = [...room.players, {
         ...newPlayer,
         value: parseInt(newPlayer.value),
@@ -374,7 +363,7 @@ const AuctioneerRoom = ({ room, userId, db, showPopup, setRoom }) => {
       return;
     }
     try {
-      const roomDocRef = doc(db, 'rooms', room.id);
+      const roomDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', room.id);
       const updatedPlayers = room.players.map((p, index) =>
         index === nextPlayerIndex ? { ...p, status: 'bidding' } : p
       );
@@ -397,10 +386,8 @@ const AuctioneerRoom = ({ room, userId, db, showPopup, setRoom }) => {
     }
 
     let newCallState = room.finalCallState + 1;
-    const roomDocRef = doc(db, 'rooms', room.id);
+    const roomDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', room.id);
     
-    if (newCallState > 3) newCallState = 3;
-
     await updateDoc(roomDocRef, { finalCallState: newCallState });
 
     if (newCallState === 3) {
@@ -410,363 +397,7 @@ const AuctioneerRoom = ({ room, userId, db, showPopup, setRoom }) => {
       );
       await updateDoc(roomDocRef, {
         players: updatedPlayers,
-      });
-      const winnerName = room.participants.find(p => p.id === player.highestBidderId)?.name || 'Anonymous';
-      showPopup('Sold!', `${player.name} sold to ${winnerName} for ${player.currentBid}!`);
-    }
-  };
-
-  const getParticipantsWinningBids = (participantId) => {
-    return room.players.filter(player => player.winnerId === participantId);
-  };
-  
-  const showParticipantBids = (participant) => {
-    const winningBids = getParticipantsWinningBids(participant.id);
-    setSelectedParticipantBids({ ...participant, winningBids });
-    setShowParticipantsModal(true);
-  };
-
-  const handleShare = async () => {
-    const shareText = `Join my eFootball card auction! Room Code: ${room.id}\nLink: https://shasin549.github.io/betaauc/?room=${room.id}`;
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: 'eFootball Auction',
-          text: shareText,
-        });
-      } catch (error) {
-        console.error('Error sharing:', error);
-      }
-    } else {
-      showPopup('Share', `Copy this text: ${shareText}`);
-      // Fallback for desktop
-      const tempInput = document.createElement('textarea');
-      tempInput.value = shareText;
-      document.body.appendChild(tempInput);
-      tempInput.select();
-      document.execCommand('copy');
-      document.body.removeChild(tempInput);
-    }
-  };
-  
-  const handleCopyLink = () => {
-    const roomLink = `https://shasin549.github.io/betaauc/?room=${room.id}`;
-    navigator.clipboard.writeText(roomLink);
-    showPopup('Link Copied', 'The invite link has been copied to your clipboard!');
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-900 text-white">
-        <p>Loading your room...</p>
-      </div>
-    );
-  }
-
-  const currentPlayer = room.currentBiddingPlayerIndex !== null ? room.players[room.currentBiddingPlayerIndex] : null;
-
-  return (
-    <div className="flex flex-col min-h-screen p-4 bg-gray-950 text-gray-100">
-      <header className="flex justify-between items-center bg-gray-800 p-4 rounded-b-lg shadow-md mb-4 sticky top-0 z-10">
-        <h1 className="text-xl md:text-2xl font-bold text-indigo-400">Room: {room.roomName}</h1>
-        <div className="flex items-center space-x-2">
-            <button onClick={() => setView('index')} className="p-2 rounded-full hover:bg-gray-700 transition-colors">
-                <LogOut size={20} />
-            </button>
-        </div>
-      </header>
-
-      <main className="flex-1 flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4">
-        {/* Left Panel - Auctioneer Controls */}
-        <div className="w-full md:w-2/3 bg-gray-800 p-6 rounded-lg shadow-xl border border-gray-700">
-          <div className="flex flex-col md:flex-row justify-between items-center mb-6 space-y-4 md:space-y-0">
-            <h2 className="text-2xl font-bold text-white flex items-center">
-                <Gavel className="mr-2 text-indigo-400" /> Auctioneer Controls
-            </h2>
-            <div className="flex flex-wrap gap-2 justify-center md:justify-end">
-              <button onClick={handleCopyLink} className="flex items-center px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md transition-colors">
-                <Link size={16} className="mr-2" />
-                Copy Link
-              </button>
-              <button onClick={handleShare} className="flex items-center px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md transition-colors">
-                <Share2 size={16} className="mr-2" />
-                Share
-              </button>
-            </div>
-          </div>
-          
-          <div className="mb-6">
-            {currentPlayer ? (
-              <div className="bg-gray-700 p-6 rounded-lg border border-gray-600 shadow-inner">
-                <h3 className="text-xl font-bold text-white mb-2">Current Player: {currentPlayer.name}</h3>
-                <p className="text-gray-300">Club: {currentPlayer.club}</p>
-                <p className="text-gray-300">Position: {currentPlayer.position}</p>
-                <p className="text-gray-300">Playing Style: {currentPlayer.style}</p>
-                <div className="mt-4 text-center">
-                  <p className="text-sm text-gray-400 mb-1">Current Bid:</p>
-                  <p className="text-4xl font-extrabold text-green-400">{currentPlayer.currentBid}</p>
-   );
-};
-
-const IndexPage = ({ setView }) => {
-  return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-4 text-center">
-      <div className="max-w-2xl w-full">
-        <h1 className="text-4xl md:text-5xl font-extrabold text-white mb-4">eFootball Card Auction</h1>
-        <p className="text-lg md:text-xl text-gray-300 mb-8">Choose your role to get started.</p>
-        <div className="flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-8">
-          <button
-            onClick={() => setView('auctioneerSetup')}
-            className="flex-1 p-6 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-bold rounded-lg shadow-2xl transition-all duration-300 transform hover:scale-105 flex flex-col items-center justify-center"
-          >
-            <Gavel size={48} className="mb-2" />
-            <span className="text-2xl">I'm an Auctioneer</span>
-          </button>
-          <button
-            onClick={() => setView('bidderSetup')}
-            className="flex-1 p-6 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white font-bold rounded-lg shadow-2xl transition-all duration-300 transform hover:scale-105 flex flex-col items-center justify-center"
-          >
-            <Hammer size={48} className="mb-2" />
-            <span className="text-2xl">I'm a Bidder</span>
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const AuctioneerSetup = ({ setView, userId, db, showPopup }) => {
-  const [roomName, setRoomName] = useState('');
-  const [maxParticipants, setMaxParticipants] = useState(20);
-  const [bidIncrement, setBidIncrement] = useState(100);
-  const [loading, setLoading] = useState(false);
-
-  const createRoom = async () => {
-    if (!roomName) {
-      showPopup('Error', 'Please enter a room name.');
-      return;
-    }
-    setLoading(true);
-    try {
-      const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-      const roomDocRef = doc(db, 'rooms', roomCode);
-      const newRoom = {
-        roomName,
-        maxParticipants,
-        bidIncrement,
-        auctioneerId: userId,
-        participants: [],
-        players: [],
         currentBiddingPlayerIndex: null,
-        finalCallState: 0, // 0: not started, 1: first, 2: second, 3: sold
-        createdAt: new Date(),
-        active: true
-      };
-
-      await setDoc(roomDocRef, newRoom);
-      showPopup('Success', `Auction room created! Share this code with bidders: ${roomCode}`);
-      setLoading(false);
-      setView('auctioneerRoom');
-    } catch (error) {
-      console.error('Error creating room:', error);
-      showPopup('Error', 'Failed to create room. Please try again.');
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="flex items-center justify-center min-h-screen p-4">
-      <div className="bg-gray-800 p-8 rounded-lg shadow-2xl max-w-xl w-full border border-gray-700">
-        <h2 className="text-3xl font-bold text-indigo-400 mb-6">Create Auction Room</h2>
-        <div className="space-y-4">
-          <input
-            type="text"
-            placeholder="Auction Room Name"
-            value={roomName}
-            onChange={(e) => setRoomName(e.target.value)}
-            className="w-full p-3 rounded-md bg-gray-700 border border-gray-600 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
-          <label className="block text-gray-300">
-            Number of Participants:
-            <input
-              type="number"
-              value={maxParticipants}
-              onChange={(e) => setMaxParticipants(parseInt(e.target.value))}
-              className="w-full p-3 rounded-md bg-gray-700 border border-gray-600 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 mt-1"
-            />
-          </label>
-          <label className="block text-gray-300">
-            Bid Increment:
-            <input
-              type="number"
-              value={bidIncrement}
-              onChange={(e) => setBidIncrement(parseInt(e.target.value))}
-              className="w-full p-3 rounded-md bg-gray-700 border border-gray-600 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 mt-1"
-            />
-          </label>
-        </div>
-        <div className="mt-6 flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4">
-          <button
-            onClick={createRoom}
-            disabled={loading}
-            className="flex-1 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-md shadow-lg transition-all duration-200 transform hover:scale-105 disabled:opacity-50"
-          >
-            {loading ? 'Creating...' : 'Create Room'}
-          </button>
-          <button
-            onClick={() => setView('index')}
-            className="flex-1 px-6 py-3 bg-gray-700 hover:bg-gray-600 text-gray-300 font-semibold rounded-md shadow-lg transition-all duration-200 transform hover:scale-105"
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const AuctioneerRoom = ({ room, userId, db, showPopup, setRoom }) => {
-  const [loading, setLoading] = useState(true);
-  const [currentBiddingPlayer, setCurrentBiddingPlayer] = useState(null);
-  const [showPlayerForm, setShowPlayerForm] = useState(false);
-  const [newPlayer, setNewPlayer] = useState({ name: '', club: '', position: '', style: '', value: 0 });
-  const [finalCallMessage, setFinalCallMessage] = useState('');
-  const [showWinnerModal, setShowWinnerModal] = useState(false);
-  const [winnerInfo, setWinnerInfo] = useState(null);
-  const [showParticipantsModal, setShowParticipantsModal] = useState(false);
-  const [selectedParticipantBids, setSelectedParticipantBids] = useState(null);
-  const { setView } = useContext(AppContext);
-
-  useEffect(() => {
-    if (!db || !userId) return;
-
-    const q = query(collection(db, 'rooms'), where('auctioneerId', '==', userId), where('active', '==', true));
-    
-    const unsubscribe = onSnapshot(q, (querySnapshot) => {
-      if (querySnapshot.empty) {
-        showPopup('Error', 'No active auction room found. Please create one.');
-        setView('auctioneerSetup');
-        return;
-      }
-
-      querySnapshot.forEach((doc) => {
-        const roomData = { id: doc.id, ...doc.data() };
-        setRoom(roomData);
-        setLoading(false);
-
-        // Update final call message
-        const currentPlayerIndex = roomData.currentBiddingPlayerIndex;
-        if (currentPlayerIndex !== null && roomData.players[currentPlayerIndex]) {
-          const player = roomData.players[currentPlayerIndex];
-          switch (roomData.finalCallState) {
-            case 1:
-              setFinalCallMessage("First call");
-              break;
-            case 2:
-              setFinalCallMessage("Second call");
-              break;
-            case 3:
-              setFinalCallMessage("Final call");
-              showPopup('Sold!', `${player.name} sold for ${player.currentBid} to ${player.highestBidderName}!`);
-              setFinalCallMessage("");
-              break;
-            default:
-              setFinalCallMessage("");
-              break;
-          }
-        } else {
-          setFinalCallMessage("");
-        }
-      });
-    }, (error) => {
-      console.error("Error fetching room data:", error);
-      showPopup('Error', 'Failed to load auction room data.');
-      setView('index');
-    });
-
-    return () => unsubscribe();
-  }, [db, userId, setRoom, showPopup, setView]);
-
-
-  const handleInputChange = (e) => {
-    setNewPlayer({ ...newPlayer, [e.target.name]: e.target.value });
-  };
-
-  const addPlayer = async () => {
-    if (!newPlayer.name || !newPlayer.club || !newPlayer.position || !newPlayer.style || !newPlayer.value) {
-      showPopup('Error', 'Please fill in all player details.');
-      return;
-    }
-
-    try {
-      const roomDocRef = doc(db, 'rooms', room.id);
-      const updatedPlayers = [...room.players, {
-        ...newPlayer,
-        value: parseInt(newPlayer.value),
-        currentBid: parseInt(newPlayer.value),
-        highestBidderId: null,
-        highestBidderName: null,
-        status: 'pending',
-        winnerId: null,
-      }];
-      await updateDoc(roomDocRef, {
-        players: updatedPlayers
-      });
-      setNewPlayer({ name: '', club: '', position: '', style: '', value: 0 });
-      setShowPlayerForm(false);
-    } catch (error) {
-      console.error('Error adding player:', error);
-      showPopup('Error', 'Failed to add player.');
-    }
-  };
-
-  const startBidding = async () => {
-    if (room.players.length === 0) {
-      showPopup('Error', 'Please add a player first.');
-      return;
-    }
-    const nextPlayerIndex = room.players.findIndex(p => p.status === 'pending');
-    if (nextPlayerIndex === -1) {
-      showPopup('Info', 'All players have been auctioned!');
-      return;
-    }
-    try {
-      const roomDocRef = doc(db, 'rooms', room.id);
-      const updatedPlayers = room.players.map((p, index) =>
-        index === nextPlayerIndex ? { ...p, status: 'bidding' } : p
-      );
-      await updateDoc(roomDocRef, {
-        currentBiddingPlayerIndex: nextPlayerIndex,
-        players: updatedPlayers,
-        finalCallState: 0,
-      });
-    } catch (error) {
-      console.error('Error starting bidding:', error);
-      showPopup('Error', 'Failed to start bidding.');
-    }
-  };
-
-  const finalCall = async () => {
-    const currentPlayerIndex = room.currentBiddingPlayerIndex;
-    if (currentPlayerIndex === null || room.players[currentPlayerIndex].status !== 'bidding') {
-      showPopup('Error', 'No active player for bidding.');
-      return;
-    }
-
-    let newCallState = room.finalCallState + 1;
-    const roomDocRef = doc(db, 'rooms', room.id);
-    
-    if (newCallState > 3) newCallState = 3;
-
-    await updateDoc(roomDocRef, { finalCallState: newCallState });
-
-    if (newCallState === 3) {
-      const player = room.players[currentPlayerIndex];
-      const updatedPlayers = room.players.map((p, index) =>
-        index === currentPlayerIndex ? { ...p, status: 'sold', winnerId: player.highestBidderId } : p
-      );
-      await updateDoc(roomDocRef, {
-        players: updatedPlayers,
       });
       const winnerName = room.participants.find(p => p.id === player.highestBidderId)?.name || 'Anonymous';
       showPopup('Sold!', `${player.name} sold to ${winnerName} for ${player.currentBid}!`);
@@ -784,7 +415,7 @@ const AuctioneerRoom = ({ room, userId, db, showPopup, setRoom }) => {
   };
 
   const handleShare = async () => {
-    const shareText = `Join my eFootball card auction! Room Code: ${room.id}\nLink: https://shasin549.github.io/betaauc/?room=${room.id}`;
+    const shareText = `Join my eFootball card auction! Room Code: ${room.id}\n\nTo join, enter this code in the app.`;
     if (navigator.share) {
       try {
         await navigator.share({
@@ -795,8 +426,7 @@ const AuctioneerRoom = ({ room, userId, db, showPopup, setRoom }) => {
         console.error('Error sharing:', error);
       }
     } else {
-      showPopup('Share', `Copy this text: ${shareText}`);
-      // Fallback for desktop
+      showPopup('Share', `Copy this text and send it to your friends:\n\n${shareText}`);
       const tempInput = document.createElement('textarea');
       tempInput.value = shareText;
       document.body.appendChild(tempInput);
@@ -805,16 +435,10 @@ const AuctioneerRoom = ({ room, userId, db, showPopup, setRoom }) => {
       document.body.removeChild(tempInput);
     }
   };
-  
-  const handleCopyLink = () => {
-    const roomLink = `https://shasin549.github.io/betaauc/?room=${room.id}`;
-    navigator.clipboard.writeText(roomLink);
-    showPopup('Link Copied', 'The invite link has been copied to your clipboard!');
-  };
 
-  if (loading) {
+  if (loading || !room) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-900 text-white">
+      <div className="flex items-center justify-center min-h-screen bg-gray-950 text-white font-sans">
         <p>Loading your room...</p>
       </div>
     );
@@ -827,33 +451,26 @@ const AuctioneerRoom = ({ room, userId, db, showPopup, setRoom }) => {
       <header className="flex justify-between items-center bg-gray-800 p-4 rounded-b-lg shadow-md mb-4 sticky top-0 z-10">
         <h1 className="text-xl md:text-2xl font-bold text-indigo-400">Room: {room.roomName}</h1>
         <div className="flex items-center space-x-2">
-            <button onClick={() => setView('index')} className="p-2 rounded-full hover:bg-gray-700 transition-colors">
-                <LogOut size={20} />
-            </button>
+          <button onClick={() => setView('index')} className="p-2 rounded-full hover:bg-gray-700 transition-colors">
+            <LogOut size={20} />
+          </button>
         </div>
       </header>
-
       <main className="flex-1 flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4">
-        {/* Left Panel - Auctioneer Controls */}
         <div className="w-full md:w-2/3 bg-gray-800 p-6 rounded-lg shadow-xl border border-gray-700">
           <div className="flex flex-col md:flex-row justify-between items-center mb-6 space-y-4 md:space-y-0">
             <h2 className="text-2xl font-bold text-white flex items-center">
-                <Gavel className="mr-2 text-indigo-400" /> Auctioneer Controls
+              <Gavel className="mr-2 text-indigo-400" /> Auctioneer Controls
             </h2>
             <div className="flex flex-wrap gap-2 justify-center md:justify-end">
-              <button onClick={handleCopyLink} className="flex items-center px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md transition-colors">
-                <Link size={16} className="mr-2" />
-                Copy Link
-              </button>
               <button onClick={handleShare} className="flex items-center px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md transition-colors">
                 <Share2 size={16} className="mr-2" />
-                Share
+                Share Room Code
               </button>
             </div>
           </div>
-          
           <div className="mb-6">
-            {currentPlayer ? (
+            {currentPlayer && currentPlayer.status === 'bidding' ? (
               <div className="bg-gray-700 p-6 rounded-lg border border-gray-600 shadow-inner">
                 <h3 className="text-xl font-bold text-white mb-2">Current Player: {currentPlayer.name}</h3>
                 <p className="text-gray-300">Club: {currentPlayer.club}</p>
@@ -869,4 +486,25 @@ const AuctioneerRoom = ({ room, userId, db, showPopup, setRoom }) => {
               </div>
             ) : (
               <div className="bg-gray-700 p-6 rounded-lg border border-gray-600 shadow-inner text-center text-gray-400">
-                <p
+                <p className="text-lg">No player is currently up for auction.</p>
+                <p className="text-sm mt-2">Add a player below and click "Start Bidding".</p>
+              </div>
+            )}
+          </div>
+          {finalCallMessage && (
+            <div className="text-center bg-yellow-900 text-yellow-300 p-3 rounded-md mb-4 font-semibold">
+              {finalCallMessage}
+            </div>
+          )}
+          <div className="flex flex-wrap gap-4 justify-center md:justify-start mb-6">
+            <button
+              onClick={startBidding}
+              className="flex-1 px-4 py-3 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-md transition-all duration-200 transform hover:scale-105 disabled:opacity-50"
+              disabled={room.players.every(p => p.status !== 'pending')}
+            >
+              Start Bidding
+            </button>
+            <button
+              onClick={finalCall}
+              className="flex-1 px-4 py-3 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-md transition-all duration-200 transform hover:scale-105 disabled:opacity-50"
+              disabled={!currentPlayer || currentPlayer.status !== 'biddin
